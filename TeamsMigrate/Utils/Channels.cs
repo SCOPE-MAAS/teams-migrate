@@ -8,7 +8,6 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using TeamsMigrate.Models;
-using static TeamsMigrate.Models.MsTeams;
 using System.Linq;
 
 namespace TeamsMigrate.Utils
