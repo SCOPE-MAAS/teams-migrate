@@ -3,6 +3,7 @@ using System.IO;
 using CommandLine;
 using log4net;
 using log4net.Core;
+using System.Collections.Generic;
 
 namespace TeamsMigrate
 {
@@ -34,7 +35,6 @@ namespace TeamsMigrate
             string slackArchiveBasePath = "";
             string slackArchiveTempPath = "";
             string channelsPath = "";
- 
 
             Console.CancelKeyPress += delegate (object sender, ConsoleCancelEventArgs e)
             {
@@ -66,20 +66,15 @@ namespace TeamsMigrate
                 log.Info("You've successfully signed in.");
             }
 
-            // Create a timer and set a two second interval.
             aTimer = new System.Timers.Timer();
             aTimer.Interval = 30 * 60 * 1000;
 
-            // Hook up the Elapsed event for the timer. 
             aTimer.Elapsed += (Object source, System.Timers.ElapsedEventArgs e) =>
             {
                 TeamsMigrate.Utils.Auth.AccessToken = TeamsMigrate.Utils.Auth.Login();
             };
 
-            // Have the timer fire repeated events (true is the default)
             aTimer.AutoReset = true;
-
-            // Start the timer
             aTimer.Enabled = true;
             string teamName;
 
@@ -106,45 +101,50 @@ namespace TeamsMigrate
 
             log.DebugFormat("Use directory {0} ({1})", slackArchiveBasePath, slackArchiveTempPath);
 
-            //Scanning channels.json
             var slackChannelsToMigrate = Utils.Channels.ScanSlackChannelsJson(channelsPath);
 
             if (File.Exists(Path.Combine(slackArchiveBasePath, "groups.json")))
             {
-                //Scanning groups.json
                 slackChannelsToMigrate.AddRange(Utils.Channels.ScanSlackChannelsJson(Path.Combine(slackArchiveBasePath, "groups.json"), "private"));
             }
 
-            //Scanning users in Slack archive
             var slackUserList = Utils.Users.ScanUsers(Path.Combine(slackArchiveBasePath, "users.json"));
 
-            Console.Write("Enter the name of the existing Teams team: ");
-            var existingTeamName = Console.ReadLine();
-            var selectedTeamId = Utils.Channels.GetTeamIdByName(existingTeamName);
+            // Ask for the existing team ID
+            Console.Write("Enter the existing Team ID: ");
+            string selectedTeamId = Console.ReadLine();
 
-            if (String.IsNullOrEmpty(selectedTeamId))
+            // Ask for channel mappings
+            Dictionary<string, string> channelMappings = new Dictionary<string, string>();
+            foreach (var slackChannel in slackChannelsToMigrate)
             {
-                log.ErrorFormat("The team '{0}' does not exist. Exit.", existingTeamName);
-                Environment.Exit(0);
+                Console.Write($"Enter the corresponding MS Teams channel ID for Slack channel '{slackChannel.channelName}': ");
+                string msTeamsChannelId = Console.ReadLine();
+                channelMappings.Add(slackChannel.channelId, msTeamsChannelId);
             }
-
-            // Map Slack channels to Teams channels
-            var msTeamsChannelsWithSlackProps = Utils.Channels.GetChannelMappings(slackChannelsToMigrate);
 
             if (CmdOptions.MigrateMessages)
             {
-                //Scanning messages in Slack channels
-                Utils.Messages.ScanMessagesByChannel(msTeamsChannelsWithSlackProps, slackArchiveTempPath, slackUserList, selectedTeamId, CmdOptions.MigrateFiles);
+                Utils.Messages.ScanMessagesByChannel(slackChannelsToMigrate.Select(sc => new Models.Combined.ChannelsMapping
+                {
+                    slackChannelId = sc.channelId,
+                    slackChannelName = sc.channelName,
+                    displayName = sc.channelName,
+                    id = channelMappings[sc.channelId]
+                }).ToList(), slackArchiveTempPath, slackUserList, selectedTeamId, CmdOptions.MigrateFiles);
             }
 
             if (!Program.CmdOptions.ReadOnly)
             {
-                //Complete team and channels migration
-                Utils.Channels.CompleteTeamMigration(selectedTeamId);
-
-                //Assign ownerships
+                // Assign ownerships and memberships
                 Utils.Channels.AssignTeamOwnerships(selectedTeamId);
-                Utils.Channels.AssignChannelsMembership(selectedTeamId, msTeamsChannelsWithSlackProps, slackUserList);
+                Utils.Channels.AssignChannelsMembership(selectedTeamId, slackChannelsToMigrate.Select(sc => new Models.Combined.ChannelsMapping
+                {
+                    slackChannelId = sc.channelId,
+                    slackChannelName = sc.channelName,
+                    displayName = sc.channelName,
+                    id = channelMappings[sc.channelId]
+                }).ToList(), slackUserList);
 
                 TeamsMigrate.Utils.Users.UsersCleanup();
             }
