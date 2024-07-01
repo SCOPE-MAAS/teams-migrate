@@ -20,8 +20,7 @@ namespace TeamsMigrate.Utils
 
         private static Dictionary<string, string> SlackToTeamsIdsMapping = new Dictionary<string, string>();
 
-        public static void ScanMessagesByChannel(List<Models.Combined.ChannelsMapping> channelsMapping, string basePath,
-            List<ViewModels.SimpleUser> slackUserList, String selectedTeamId, bool copyFileAttachments)
+        public static void ScanMessagesByChannel(List<Models.Combined.ChannelsMapping> channelsMapping, string basePath, List<ViewModels.SimpleUser> slackUserList, String selectedTeamId, bool copyFileAttachments)
         {
             int i = 1;
             foreach (var channel in channelsMapping)
@@ -29,7 +28,7 @@ namespace TeamsMigrate.Utils
                 List<Models.Combined.AttachmentsMapping> channelAttachmentsToUpload = null;
                 try
                 {
-                    log.InfoFormat("Migrating messages in channel {0} ({1} out of {2})", channel.slackChannelName, i++, channelsMapping.Count);
+                    log.InfoFormat("Migrating messages in channel {0} ({1} ouf of {2}) ", channel.slackChannelName, i++, channelsMapping.Count);
                     channelAttachmentsToUpload = GetAndUploadMessages(channel, basePath, slackUserList, selectedTeamId, copyFileAttachments);
                 }
                 catch (Exception ex)
@@ -40,8 +39,16 @@ namespace TeamsMigrate.Utils
             }
         }
 
-        static List<Models.Combined.AttachmentsMapping> GetAndUploadMessages(Models.Combined.ChannelsMapping channelsMapping, string basePath,
-            List<ViewModels.SimpleUser> slackUserList, String selectedTeamId, bool copyFileAttachments)
+        public static DateTime UnixTimeStampToDateTime(double unixTimeStamp)
+        {
+            // Unix timestamp is seconds past epoch
+            DateTime dtDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, System.DateTimeKind.Utc);
+            long unixTimeStampInTicks = (long)(unixTimeStamp * TimeSpan.TicksPerSecond);
+            dtDateTime = new DateTime(dtDateTime.Ticks + unixTimeStampInTicks, System.DateTimeKind.Utc);
+            return dtDateTime;
+        }
+
+        static List<Models.Combined.AttachmentsMapping> GetAndUploadMessages(Models.Combined.ChannelsMapping channelsMapping, string basePath, List<ViewModels.SimpleUser> slackUserList, String selectedTeamId, bool copyFileAttachments)
         {
             var messageList = new List<ViewModels.SimpleMessage>();
             messageList.Clear();
@@ -78,12 +85,7 @@ namespace TeamsMigrate.Utils
                                 var messageId = (string)obj.SelectToken("ts");
                                 string rootId = (string)obj.SelectToken("thread_ts");
 
-                                var messageSender = FindMessageSender(obj, slackUserList);
-                                if (messageSender == null)
-                                {
-                                    log.Warn("Original sender not found. Skipping message.");
-                                    continue;
-                                }
+                                var messageSender = Utils.Messages.FindMessageSender(obj, slackUserList);
 
                                 List<ViewModels.SimpleMessage.FileAttachment> fileAttachments = new List<ViewModels.SimpleMessage.FileAttachment>();
                                 ViewModels.SimpleMessage.FileAttachment fileAttachment = null;
@@ -195,8 +197,7 @@ namespace TeamsMigrate.Utils
                                 {
                                     id = messageId,
                                     text = HandleContent(messageText, slackUserList),
-                                    ts = UnixTimeStampToDateTime(Convert.ToDouble(messageTs)).ToUniversalTime()
-                                        .ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'ffffff'Z'"),
+                                    ts = UnixTimeStampToDateTime(Convert.ToDouble(messageTs)).ToUniversalTime().ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'ffffff'Z'"),
                                     user = messageSender,
                                     userId = Users.GetOrCreateId(messageSender, slackUserList, Program.CmdOptions.Domain),
                                     fileAttachments = fileAttachments,
@@ -285,6 +286,37 @@ namespace TeamsMigrate.Utils
                     ImportExternalMessage(selectedTeamId, channelsMapping.id, message);
                 }
             }
+        }
+
+        static void CreateSlackMessageJsonArchiveFile(String basePath, Models.Combined.ChannelsMapping channelsMapping, List<ViewModels.SimpleMessage> messageList, string selectedTeamId)
+        {
+            int messageIndexPosition = 0;
+
+            for (int slackMessageFileIndex = 0; messageIndexPosition < messageList.Count; slackMessageFileIndex++)
+            {
+                var filenameToAdd = slackMessageFileIndex.ToString() + ".json";
+                using (FileStream fs = new FileStream(Path.Combine(basePath, channelsMapping.slackChannelName, slackMessageFileIndex.ToString() + ".json"), FileMode.Create))
+                {
+                    using (StreamWriter w = new StreamWriter(fs, Encoding.UTF8))
+                    {
+                        int numOfMessagesToTake = 0;
+                        if (messageIndexPosition + 250 <= messageList.Count)
+                        {
+                            numOfMessagesToTake = 250;
+                        }
+                        else
+                        {
+                            numOfMessagesToTake = messageList.Count - messageIndexPosition;
+                        }
+                        var jsonObjectsToSave = JsonConvert.SerializeObject(messageList.Skip(messageIndexPosition).Take(numOfMessagesToTake), Formatting.Indented);
+                        messageIndexPosition += numOfMessagesToTake;
+                        w.WriteLine(jsonObjectsToSave);
+                    }
+                }
+                var pathToItem = "/" + channelsMapping.displayName + "/channelsurf/" + "messages/json" + "/" + filenameToAdd;
+                Utils.FileAttachments.UploadFileToTeamsChannel(selectedTeamId, Path.Combine(basePath, channelsMapping.slackChannelName, filenameToAdd), pathToItem).Wait();
+            }
+            return;
         }
 
         internal static void ImportExternalMessage(string teamId, string channelId, SimpleMessage message, bool retry = true)
@@ -383,8 +415,7 @@ namespace TeamsMigrate.Utils
                 return (string)obj.SelectToken("bot_id");
             }
 
-            log.Warn("Original sender not found. Skipping message.");
-            return null;
+            return "";
         }
     }
 }
