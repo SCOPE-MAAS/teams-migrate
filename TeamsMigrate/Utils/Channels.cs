@@ -3,12 +3,10 @@ using System.IO;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
-using System.Threading;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using TeamsMigrate.Models;
-using static TeamsMigrate.Models.MsTeams;
 using System.Linq;
 
 namespace TeamsMigrate.Utils
@@ -209,10 +207,11 @@ namespace TeamsMigrate.Utils
 
         internal static void AssignChannelsMembership(string selectedTeamId, List<Combined.ChannelsMapping> msTeamsChannelsWithSlackProps, List<ViewModels.SimpleUser> slackUserList)
         {
+            List<MsTeams.Channel> msTeamsChannel = GetExistingChannelsInMsTeams(selectedTeamId);
             var teamUsers = new HashSet<string>();
-            foreach (var channel in msTeamsChannelsWithSlackProps)
+            foreach (var channel in msTeamsChannel)
             {
-                var existingMsTeams = GetExistingChannelByName(channel.displayName);
+                var existingMsTeams = msTeamsChannelsWithSlackProps.Find(w => String.Equals(w.displayName, channel.displayName, StringComparison.CurrentCultureIgnoreCase));
                 if (existingMsTeams == null)
                 {
                     continue;
@@ -220,9 +219,9 @@ namespace TeamsMigrate.Utils
                 int i = 1;
                 using (var progress = new ProgressBar(String.Format("Update '{0}' membership", channel.displayName)))
                 {
-                    foreach (var member in channel.members)
+                    foreach (var member in existingMsTeams.members)
                     {
-                        progress.Report((double)i++ / channel.members.Count);
+                        progress.Report((double)i++ / existingMsTeams.members.Count);
                         if (String.IsNullOrEmpty(member))
                         {
                             continue;
