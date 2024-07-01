@@ -19,7 +19,7 @@ namespace TeamsMigrate.Utils
 
         private static HashSet<string> MissingUsers = new HashSet<string>();
 
-        private static Dictionary<string,string> DeletedUsers { get; set; }
+        private static Dictionary<string, string> DeletedUsers { get; set; }
 
         public static List<ViewModels.SimpleUser> ScanUsers(string combinedPath)
         {
@@ -53,6 +53,7 @@ namespace TeamsMigrate.Utils
                     }
                 }
             }
+
             return simpleUserList;
         }
 
@@ -175,7 +176,7 @@ namespace TeamsMigrate.Utils
             return existUser;
         }
 
-        private static Dictionary<string,string> GetDeletedUsers()
+        private static Dictionary<string, string> GetDeletedUsers()
         {
             Dictionary<string, string> deleted = new Dictionary<string, string>();
 
@@ -192,8 +193,8 @@ namespace TeamsMigrate.Utils
 
             if (!httpResponseMessage.IsSuccessStatusCode)
             {
-                log.Debug("Failed to retrieve deleted users");
-                return deleted; 
+                log.Debug("Failed to retrive deleted users");
+                return deleted;
             }
 
             dynamic users = JObject.Parse(httpResponseMessage.Content.ReadAsStringAsync().Result);
@@ -203,14 +204,14 @@ namespace TeamsMigrate.Utils
                 string id = user.id;
                 string principalName = userPrincipalName.Replace(id.Replace("-", ""), "");
                 log.DebugFormat("Found deleted user: {0}({1})", principalName, id);
-                if(!deleted.ContainsKey(principalName))
+                if (!deleted.ContainsKey(principalName))
                     deleted.Add(principalName, id);
             }
 
             return deleted;
         }
 
-        public static string GetOrCreateId(string messageSender, List<SimpleUser> slackUserList, string domain )
+        public static string GetOrCreateId(string messageSender, List<SimpleUser> slackUserList, string domain)
         {
             try
             {
@@ -230,7 +231,7 @@ namespace TeamsMigrate.Utils
                 users.Add(messageSender, id);
                 return id;
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 log.Debug("Failed to get user");
                 log.Debug("Failure", ex);
@@ -302,7 +303,7 @@ namespace TeamsMigrate.Utils
             newUserObject.Add("@odata.type", "#microsoft.graph.aadUserConversationMember");
             newUserObject.Add("user@odata.bind", "https://graph.microsoft.com/v1.0/users('" + userId + "')");
 
-            var url = O365.MsGraphBetaEndpoint + "teams/" + selectedTeamId + "/members";
+            var url = O365.MsGraphEndpoint + "teams/" + selectedTeamId + "/members";
             log.Debug("POST " + url);
 
             var addUserToTeamPostData = JsonConvert.SerializeObject(newUserObject);
