@@ -4,6 +4,7 @@ using CommandLine;
 using log4net;
 using log4net.Core;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace TeamsMigrate
 {
