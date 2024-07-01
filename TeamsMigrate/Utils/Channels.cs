@@ -3,10 +3,12 @@ using System.IO;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
+using System.Threading;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using TeamsMigrate.Models;
+using static TeamsMigrate.Models.MsTeams;
 using System.Linq;
 
 namespace TeamsMigrate.Utils
@@ -41,7 +43,7 @@ namespace TeamsMigrate.Utils
                             channelName = obj["name"].ToString(),
                             channelDescription = obj["purpose"]["value"].ToString(),
                             membershipType = membershipType,
-                            members = obj["members"].ToObject<List<string>>()
+                            members = obj["members"]?.ToObject<List<string>>() ?? new List<string>()
                         });
                     }
                 }
@@ -49,231 +51,105 @@ namespace TeamsMigrate.Utils
             return slackChannels;
         }
 
-        public static string GetTeamIdByName(string teamName)
+        internal static void DeleteChannel(string selectedTeamId, string channelId)
         {
             Helpers.httpClient.DefaultRequestHeaders.Clear();
             Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.AccessToken);
             Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            var url = String.Format("{0}groups/?$filter=resourceProvisioningOptions/Any(x:x eq 'Team')", O365.MsGraphBetaEndpoint);
-            var httpResponseMessage = Helpers.httpClient.GetAsync(url).Result;
-
+            var url = String.Format("{0}teams/{1}/channels/{2}", O365.MsGraphEndpoint, selectedTeamId, channelId);
+            var httpResponseMessage = Helpers.httpClient.DeleteAsync(url).Result;
             if (httpResponseMessage.IsSuccessStatusCode)
             {
-                var teams = JsonConvert.DeserializeObject<Models.MsTeams.Team>(httpResponseMessage.Content.ReadAsStringAsync().Result);
-                var team = teams.value.FirstOrDefault(t => t.displayName.Equals(teamName, StringComparison.CurrentCultureIgnoreCase));
-                if (team != null)
-                {
-                    return team.id;
-                }
+                log.DebugFormat("Channel {0} in team {1} has been deleted", channelId, selectedTeamId);
             }
-
-            return null;
-        }
-
-        public static List<Combined.ChannelsMapping> GetChannelMappings(List<Slack.Channels> slackChannels)
-        {
-            var combinedChannelsMapping = new List<Combined.ChannelsMapping>();
-
-            foreach (var slackChannel in slackChannels)
+            else
             {
-                Console.Write($"Enter the name of the corresponding Teams channel for Slack channel '{slackChannel.channelName}': ");
-                string teamsChannelName = Console.ReadLine();
-
-                var existingTeamsChannel = GetExistingChannelByName(teamsChannelName);
-                if (existingTeamsChannel != null)
-                {
-                    combinedChannelsMapping.Add(new Combined.ChannelsMapping()
-                    {
-                        id = existingTeamsChannel.id,
-                        displayName = existingTeamsChannel.displayName,
-                        description = existingTeamsChannel.description,
-                        slackChannelId = slackChannel.channelId,
-                        slackChannelName = slackChannel.channelName,
-                        folderId = "",
-                        members = new List<string>(slackChannel.members)
-                    });
-                }
-                else
-                {
-                    log.WarnFormat("Teams channel '{0}' does not exist. Skipping mapping for Slack channel '{1}'.", teamsChannelName, slackChannel.channelName);
-                }
-            }
-
-            return combinedChannelsMapping;
-        }
-
-        public static MsTeams.Channel GetExistingChannelByName(string channelName)
-        {
-            Helpers.httpClient.DefaultRequestHeaders.Clear();
-            Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.AccessToken);
-            Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-            var url = String.Format("{0}teams/{1}/channels", O365.MsGraphBetaEndpoint, channelName);
-            var httpResponseMessage = Helpers.httpClient.GetAsync(url).Result;
-
-            if (httpResponseMessage.IsSuccessStatusCode)
-            {
-                var msTeamsTeam = JsonConvert.DeserializeObject<MsTeams.Team>(httpResponseMessage.Content.ReadAsStringAsync().Result);
-                return msTeamsTeam.value.FirstOrDefault(t => t.displayName.Equals(channelName, StringComparison.CurrentCultureIgnoreCase));
-            }
-
-            return null;
-        }
-
-        internal static void CompleteTeamMigration(string selectedTeamId)
-        {
-            if (Program.CmdOptions.ReadOnly)
-            {
-                log.Debug("skip operation due to readonly mode");
-                return;
-            }
-            var channels = GetExistingChannelsInMsTeams(selectedTeamId);
-            int i = 1;
-            using (var progress = new ProgressBar("Complete migration"))
-            {
-                foreach (Channel channel in channels)
-                {
-                    CompleteChannelMigration(selectedTeamId, channel.id);
-                    progress.Report((double)i++ / channels.Count);
-                }
-            }
-
-            Helpers.httpClient.DefaultRequestHeaders.Clear();
-            Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.AccessToken);
-            Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-            log.Debug("POST " + O365.MsGraphBetaEndpoint + "teams/" + selectedTeamId + "/completeMigration");
-
-            var httpResponseMessage = Helpers.httpClient.PostAsync(O365.MsGraphBetaEndpoint + "teams/" + selectedTeamId + "/completeMigration", new StringContent("", Encoding.UTF8, "application/json")).Result;
-
-            if (!httpResponseMessage.IsSuccessStatusCode)
-            {
-                log.Error("Failed to complete team migration");
+                log.DebugFormat("Failed to delete channel {0} in team {1}", channelId, selectedTeamId);
                 log.Debug(httpResponseMessage.Content.ReadAsStringAsync().Result);
             }
         }
 
-        internal static void CompleteChannelMigration(string selectedTeamId, string channelId)
+        internal static void AddChannel(string selectedTeamId, string channelName, string description)
         {
-            try
-            {
-                Helpers.httpClient.DefaultRequestHeaders.Clear();
-                Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.AccessToken);
-                Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            var createChannelUrl = String.Format("{0}teams/{1}/channels", O365.MsGraphEndpoint, selectedTeamId);
+            dynamic newChannelObject = new JObject();
+            newChannelObject.displayName = channelName;
+            newChannelObject.description = description;
+            newChannelObject.Add("@odata.type", "#microsoft.graph.channel");
 
-                log.Debug("POST " + O365.MsGraphBetaEndpoint + "teams/" + selectedTeamId + "/channels/" + channelId + "/completeMigration");
-
-                if (Program.CmdOptions.ReadOnly)
-                {
-                    log.Debug("skip operation due to readonly mode");
-                }
-
-                var completeMigrationResponseMessage = Helpers.httpClient.PostAsync(O365.MsGraphBetaEndpoint + "teams/" + selectedTeamId + "/channels/" + channelId + "/completeMigration", new StringContent("", Encoding.UTF8, "application/json")).Result;
-
-                if (!completeMigrationResponseMessage.IsSuccessStatusCode)
-                {
-                    log.Error("Failed to complete channel migration");
-                    log.Debug(completeMigrationResponseMessage.Content.ReadAsStringAsync().Result);
-                }
-            }
-            catch (Exception ex)
-            {
-                log.Error("Failed to complete channel migration");
-                log.Debug("Failure", ex);
-            }
-        }
-
-        public static List<MsTeams.Channel> GetExistingChannelsInMsTeams(string teamId)
-        {
-            MsTeams.Team msTeamsTeam = new MsTeams.Team();
+            var createChannelPostData = JsonConvert.SerializeObject(newChannelObject);
+            log.DebugFormat("POST {0} \n{1}", createChannelUrl, createChannelPostData);
 
             Helpers.httpClient.DefaultRequestHeaders.Clear();
             Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.AccessToken);
             Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            var url = O365.MsGraphBetaEndpoint + "teams/" + teamId + "/channels";
-            log.Debug("GET " + url);
-            var httpResponseMessage = Helpers.httpClient.GetAsync(url).Result;
-            log.Debug(httpResponseMessage);
-            if (httpResponseMessage.IsSuccessStatusCode)
-            {
-                var httpResultString = httpResponseMessage.Content.ReadAsStringAsync().Result;
-                log.Debug(httpResultString);
-                msTeamsTeam = JsonConvert.DeserializeObject<MsTeams.Team>(httpResultString);
-            }
 
-            return msTeamsTeam.value;
+            var httpResponseMessage = Helpers.httpClient.PostAsync(createChannelUrl, new StringContent(createChannelPostData, Encoding.UTF8, "application/json")).Result;
+
+            if (!httpResponseMessage.IsSuccessStatusCode)
+            {
+                log.Error("Channel could not be created");
+                log.Debug(httpResponseMessage.Content.ReadAsStringAsync().Result);
+            }
         }
 
-        internal static void AssignChannelsMembership(string selectedTeamId, List<Combined.ChannelsMapping> msTeamsChannelsWithSlackProps, List<ViewModels.SimpleUser> slackUserList)
+        internal static void CompleteTeamMigration(string selectedTeamId)
         {
-            List<MsTeams.Channel> msTeamsChannel = GetExistingChannelsInMsTeams(selectedTeamId);
-            var teamUsers = new HashSet<string>();
-            foreach (var channel in msTeamsChannel)
+            var completeTeamMigrationUrl = String.Format("{0}teams/{1}/completeMigration", O365.MsGraphBetaEndpoint, selectedTeamId);
+
+            dynamic completeTeamMigrationObject = new JObject();
+            completeTeamMigrationObject.Add("@odata.type", "#microsoft.graph.completeMigration");
+
+            var completeTeamMigrationPostData = JsonConvert.SerializeObject(completeTeamMigrationObject);
+            log.DebugFormat("POST {0} \n{1}", completeTeamMigrationUrl, completeTeamMigrationPostData);
+
+            Helpers.httpClient.DefaultRequestHeaders.Clear();
+            Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.AccessToken);
+            Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var httpResponseMessage = Helpers.httpClient.PostAsync(completeTeamMigrationUrl, new StringContent(completeTeamMigrationPostData, Encoding.UTF8, "application/json")).Result;
+
+            if (!httpResponseMessage.IsSuccessStatusCode)
             {
-                var existingMsTeams = msTeamsChannelsWithSlackProps.Find(w => String.Equals(w.displayName, channel.displayName, StringComparison.CurrentCultureIgnoreCase));
-                if (existingMsTeams == null)
-                {
-                    continue;
-                }
-                int i = 1;
-                using (var progress = new ProgressBar(String.Format("Update '{0}' membership", channel.displayName)))
-                {
-                    foreach (var member in existingMsTeams.members)
-                    {
-                        progress.Report((double)i++ / existingMsTeams.members.Count);
-                        if (String.IsNullOrEmpty(member))
-                        {
-                            continue;
-                        }
-                        var user = slackUserList.FirstOrDefault(u => member.Equals(u.userId));
-                        if (user != null)
-                        {
-                            var userId = Users.GetUserIdByName(user.name);
-                            if (String.IsNullOrEmpty(userId))
-                            {
-                                log.DebugFormat("Missing user {0}", user.name + "@" + Program.CmdOptions.Domain);
-                                continue;
-                            }
-                            if (!teamUsers.Contains(member))
-                            {
-                                log.DebugFormat("Add {0} to team {1}", user.name, selectedTeamId);
-                                if (Users.AddMemberTeam(selectedTeamId, userId))
-                                {
-                                    teamUsers.Add(member);
-                                }
-                            }
-                            if (!channel.membershipType.Equals("standard"))
-                            {
-                                log.DebugFormat("Add {0} to channel {1}", user.name, channel.id);
-                                Users.AddMemberChannel(selectedTeamId, channel.id, userId);
-                            }
-                        }
-                        else
-                        {
-                            log.DebugFormat("Missing member {0}", member);
-                        }
-                    }
-                }
+                log.Error("Complete team migration could not be finished");
+                log.Debug(httpResponseMessage.Content.ReadAsStringAsync().Result);
             }
         }
 
         internal static void AssignTeamOwnerships(string selectedTeamId)
         {
-            Console.Write("Do you want to assign ownership? (y|n): ");
-            var completeMigration = Console.ReadLine();
-            if (completeMigration.StartsWith("y", StringComparison.CurrentCultureIgnoreCase))
+            var authHelper = new Utils.O365.AuthenticationHelper() { AccessToken = TeamsMigrate.Utils.Auth.AccessToken };
+            Microsoft.Graph.GraphServiceClient gcs = new Microsoft.Graph.GraphServiceClient(authHelper);
+
+            var owners = gcs.Groups[selectedTeamId].Owners.Request().GetAsync().Result;
+
+            foreach (var owner in owners)
             {
-                if (String.IsNullOrEmpty(TeamsMigrate.Utils.Auth.UserToken))
+                log.DebugFormat("Adding owner: {0}", owner.Id);
+                TeamsMigrate.Utils.Users.AddOwner(selectedTeamId, owner.Id);
+            }
+        }
+
+        internal static void AssignChannelsMembership(string selectedTeamId, List<Models.Combined.ChannelsMapping> channelsMapping, List<ViewModels.SimpleUser> slackUserList)
+        {
+            foreach (var channel in channelsMapping)
+            {
+                var authHelper = new Utils.O365.AuthenticationHelper() { AccessToken = TeamsMigrate.Utils.Auth.AccessToken };
+                Microsoft.Graph.GraphServiceClient gcs = new Microsoft.Graph.GraphServiceClient(authHelper);
+
+                foreach (var member in channel.members)
                 {
-                    TeamsMigrate.Utils.Auth.UserLogin();
+                    var user = slackUserList.FirstOrDefault(u => u.userId == member);
+                    if (user != null)
+                    {
+                        var userId = Users.GetUserIdByName(user.name);
+                        if (!string.IsNullOrEmpty(userId))
+                        {
+                            Users.AddMemberChannel(selectedTeamId, channel.id, userId);
+                        }
+                    }
                 }
-
-                Helpers.httpClient.DefaultRequestHeaders.Clear();
-                Helpers.httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TeamsMigrate.Utils.Auth.UserToken);
-                Helpers.httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-                Users.AddOwner(selectedTeamId, O365.getUserGuid(TeamsMigrate.Utils.Auth.UserToken, "me"));
             }
         }
     }
