@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using CommandLine;
 using log4net;
@@ -6,7 +6,6 @@ using log4net.Core;
 
 namespace TeamsMigrate
 {
-
     class Program
     {
         private static readonly ILog log = LogManager.GetLogger(typeof(Program));
@@ -35,23 +34,19 @@ namespace TeamsMigrate
             string slackArchiveBasePath = "";
             string slackArchiveTempPath = "";
             string channelsPath = "";
- 
 
             Console.CancelKeyPress += delegate (object sender, ConsoleCancelEventArgs e)
             {
-
-                    try
-                    {
-                        Utils.Files.CleanUpTempDirectoriesAndFiles(slackArchiveTempPath);
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error("Failed to complete cleanup");
-                        log.Debug("Failure",ex);
-                    }
-
+                try
+                {
+                    Utils.Files.CleanUpTempDirectoriesAndFiles(slackArchiveTempPath);
+                }
+                catch (Exception ex)
+                {
+                    log.Error("Failed to complete cleanup");
+                    log.Debug("Failure", ex);
+                }
             };
-
 
             log.Info("Tenant is " + CmdOptions.TenantId);
             log.Info("Application ID is " + CmdOptions.ClientId);
@@ -85,7 +80,6 @@ namespace TeamsMigrate
 
             // Start the timer
             aTimer.Enabled = true;
-            string teamName;
 
             if (!CmdOptions.ExportPath.EndsWith(".zip", StringComparison.CurrentCulture))
             {
@@ -94,7 +88,6 @@ namespace TeamsMigrate
                     log.ErrorFormat("Directory {0} does not exist. Exit.", CmdOptions.ExportPath);
                     Environment.Exit(0);
                 }
-                teamName = Path.GetDirectoryName(CmdOptions.ExportPath);
                 slackArchiveBasePath = CmdOptions.ExportPath;
                 slackArchiveTempPath = CmdOptions.ExportPath;
                 channelsPath = Path.Combine(slackArchiveBasePath, "channels.json");
@@ -104,48 +97,48 @@ namespace TeamsMigrate
             {
                 slackArchiveTempPath = Path.GetTempFileName();
                 slackArchiveBasePath = Utils.Files.DecompressSlackArchiveFile(CmdOptions.ExportPath, slackArchiveTempPath);
-                teamName = CmdOptions.ExportPath.ToString().Split(".")[0];
                 channelsPath = Path.Combine(slackArchiveBasePath, "channels.json");
             }
 
             log.DebugFormat("Use directory {0} ({1})", slackArchiveBasePath, slackArchiveTempPath);
 
-            //Scanning channels.json
+            // Scanning channels.json
             var slackChannelsToMigrate = Utils.Channels.ScanSlackChannelsJson(channelsPath);
 
             if (File.Exists(Path.Combine(slackArchiveBasePath, "groups.json")))
             {
-                //Scanning groups.json
+                // Scanning groups.json
                 slackChannelsToMigrate.AddRange(Utils.Channels.ScanSlackChannelsJson(Path.Combine(slackArchiveBasePath, "groups.json"), "private"));
             }
 
-            //Scanning users in Slack archive
+            // Scanning users in Slack archive
             var slackUserList = Utils.Users.ScanUsers(Path.Combine(slackArchiveBasePath, "users.json"));
 
-            teamName = String.IsNullOrEmpty(CmdOptions.TeamsName) ?
-                "Archive " + teamName + " Slack " + DateTime.Now.ToUniversalTime() : "Archive " + CmdOptions.TeamsName + " Slack " + DateTime.Now.ToUniversalTime();
+            Console.Write("Enter the name of the existing Microsoft Teams team: ");
+            string existingTeamName = Console.ReadLine();
 
-            //Creating new team in MS Teams
-            var selectedTeamId = Utils.Channels.CreateNewTeam(teamName);
-            if (selectedTeamId == null || "".Equals(selectedTeamId))
+            var selectedTeamId = Utils.Channels.GetTeamIdByName(existingTeamName);
+            if (string.IsNullOrEmpty(selectedTeamId))
+            {
+                log.ErrorFormat("Team '{0}' does not exist. Exit.", existingTeamName);
                 Environment.Exit(0);
+            }
 
-            //Creating channels in MS Teams
-            var msTeamsChannelsWithSlackProps = Utils.Channels.CreateChannelsInMsTeams(selectedTeamId, slackChannelsToMigrate, slackArchiveTempPath);
+            // Prompt for channel mappings
+            var msTeamsChannelsWithSlackProps = Utils.Channels.GetChannelMappings(slackChannelsToMigrate);
 
             if (CmdOptions.MigrateMessages)
             {
-                //Scanning messages in Slack channels
+                // Scanning messages in Slack channels
                 Utils.Messages.ScanMessagesByChannel(msTeamsChannelsWithSlackProps, slackArchiveTempPath, slackUserList, selectedTeamId, CmdOptions.MigrateFiles);
-   
             }
 
             if (!Program.CmdOptions.ReadOnly)
             {
-                //Complete team and channels migration
+                // Complete team and channels migration
                 Utils.Channels.CompleteTeamMigration(selectedTeamId);
 
-                //Assign ownerships
+                // Assign ownerships and memberships
                 Utils.Channels.AssignTeamOwnerships(selectedTeamId);
                 Utils.Channels.AssignChannelsMembership(selectedTeamId, msTeamsChannelsWithSlackProps, slackUserList);
 
